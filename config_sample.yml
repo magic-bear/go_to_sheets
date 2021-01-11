@@ -1,0 +1,20 @@
+---
+database:
+  host: "postgres.database.host"
+  port: 5432
+  user: "logan"
+  password: "9fingers"
+  dbname: "realistic"
+loaders:
+  test1:
+    sheet: 1ZBsExxxxzkXDjxPF-dDMRfJ4TIUhsEeqnBzz0iw
+    # sheet name and range for data
+    range: Sheet1!A:Z
+    # your select statement, columns will become sheets columns.
+    query: select username, count(*) cnt from users group by username
+  test2:
+    sheet: 1ZBsExxyyyyyxzkXDjxPF-dDMRfJ4TIUhsEeqnBzz0iw
+    # sheet name and range for data
+    range: Sheet1!A:Z
+    # your select statement, columns will become sheets columns.
+    query: select username, count(*) cnt from users group by username
