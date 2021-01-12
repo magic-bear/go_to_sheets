@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"database/sql"
 
@@ -121,74 +122,83 @@ func main() {
 
 	var wg sync.WaitGroup
 	for loader := range loaders {
+		repeat := viper.GetInt("loaders." + loader + ".repeat")
 		wg.Add(1)
-		go doLoad(ctx, loader, client, sheetsService, &wg)
-
+		go doLoad(ctx, loader, client, sheetsService, &wg, repeat)
 	}
 	wg.Wait()
-
 }
 
-func doLoad(ctx context.Context, loader string, client *http.Client, sheetsService *sheets.Service, wg *sync.WaitGroup) {
+func doLoad(ctx context.Context, loader string, client *http.Client, sheetsService *sheets.Service, wg *sync.WaitGroup, repeat int) {
 	defer wg.Done()
+	for {
 
-	log.Infof("Running Loader %s", loader)
-	SpreadsheetID := viper.GetString("loaders." + loader + ".sheet")
-	rangeData := viper.GetString("loaders.ulta.range")
+		log.Infof("Running Loader %s", loader)
+		SpreadsheetID := viper.GetString("loaders." + loader + ".sheet")
+		rangeData := viper.GetString("loaders." + loader + ".range")
 
-	db := dbConnect()
-	rows, _ := db.Query(viper.GetString("loaders." + loader + ".query"))
-	defer rows.Close()
+		db := dbConnect()
+		defer db.Close()
+		rows, _ := db.Query(viper.GetString("loaders." + loader + ".query"))
+		defer rows.Close()
 
-	columns, _ := rows.Columns()
-	headers := make([]interface{}, len(columns))
-	for i := range columns {
-		headers[i] = columns[i]
-	}
-	sheetValues := [][]interface{}{headers}
-	count := len(columns)
-	values := make([]interface{}, count)
-	valuePtrs := make([]interface{}, count)
-
-	for rows.Next() {
+		columns, _ := rows.Columns()
+		headers := make([]interface{}, len(columns))
 		for i := range columns {
-			valuePtrs[i] = &values[i]
+			headers[i] = columns[i]
 		}
-		var x []interface{}
-		switch err := rows.Scan(valuePtrs...); err {
-		case sql.ErrNoRows:
-			panic("something went wrong..")
-		case nil:
-			for i, _ := range columns {
-				val := values[i]
+		sheetValues := [][]interface{}{headers}
+		count := len(columns)
+		values := make([]interface{}, count)
+		valuePtrs := make([]interface{}, count)
 
-				b, ok := val.([]byte)
-				var v interface{}
-				if ok {
-					v = string(b)
-				} else {
-					v = val
-				}
-				x = append(x, v)
+		for rows.Next() {
+			for i := range columns {
+				valuePtrs[i] = &values[i]
 			}
-			sheetValues = append(sheetValues, x)
-		default:
-			panic("row scan failure")
-		}
-	}
+			var x []interface{}
+			switch err := rows.Scan(valuePtrs...); err {
+			case sql.ErrNoRows:
+				panic("something went wrong..")
+			case nil:
+				for i, _ := range columns {
+					val := values[i]
 
-	rb := &sheets.BatchUpdateValuesRequest{
-		ValueInputOption: "USER_ENTERED",
+					b, ok := val.([]byte)
+					var v interface{}
+					if ok {
+						v = string(b)
+					} else {
+						v = val
+					}
+					x = append(x, v)
+				}
+				sheetValues = append(sheetValues, x)
+			default:
+				panic("row scan failure")
+			}
+		}
+
+		rb := &sheets.BatchUpdateValuesRequest{
+			ValueInputOption: "USER_ENTERED",
+		}
+		rb.Data = append(rb.Data, &sheets.ValueRange{
+			Range:  rangeData,
+			Values: sheetValues,
+		})
+		_, err := sheetsService.Spreadsheets.Values.BatchUpdate(SpreadsheetID, rb).Context(ctx).Do()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if repeat == 0 {
+			log.Infof("Done loader %s", loader)
+			return
+		}
+		log.Infof("Sleeping %d seconds for %s", repeat, loader)
+		time.Sleep(time.Duration(repeat) * time.Second)
+		log.Infof("Done load loop %s", loader)
 	}
-	rb.Data = append(rb.Data, &sheets.ValueRange{
-		Range:  rangeData,
-		Values: sheetValues,
-	})
-	_, err := sheetsService.Spreadsheets.Values.BatchUpdate(SpreadsheetID, rb).Context(ctx).Do()
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Infof("Done %s", loader)
 }
 
 func dbConnect() *sql.DB {
