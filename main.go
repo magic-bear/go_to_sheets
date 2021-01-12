@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"sync"
 
 	"database/sql"
 
@@ -99,6 +100,7 @@ func init() {
 
 func main() {
 
+	// set up client
 	ctx := context.Background()
 	b, err := ioutil.ReadFile("client_secret.json")
 	if err != nil {
@@ -116,68 +118,80 @@ func main() {
 	}
 
 	loaders := viper.GetStringMap("loaders")
+
+	var wg sync.WaitGroup
 	for loader := range loaders {
-		log.Infof("Running Loader %s", loader)
-		spreadsheetId := viper.GetString("loaders." + loader + ".sheet")
-		rangeData := viper.GetString("loaders.ulta.range")
+		wg.Add(1)
+		go doLoad(ctx, loader, client, sheetsService, &wg)
 
-		db := DbConnect()
-		rows, _ := db.Query(viper.GetString("loaders." + loader + ".query"))
-		defer rows.Close()
-
-		columns, _ := rows.Columns()
-		headers := make([]interface{}, len(columns))
-		for i := range columns {
-			headers[i] = columns[i]
-		}
-		sheetValues := [][]interface{}{headers}
-		count := len(columns)
-		values := make([]interface{}, count)
-		valuePtrs := make([]interface{}, count)
-
-		for rows.Next() {
-			for i := range columns {
-				valuePtrs[i] = &values[i]
-			}
-			var x []interface{}
-			switch err := rows.Scan(valuePtrs...); err {
-			case sql.ErrNoRows:
-				panic("something went wrong..")
-			case nil:
-				for i, _ := range columns {
-					val := values[i]
-
-					b, ok := val.([]byte)
-					var v interface{}
-					if ok {
-						v = string(b)
-					} else {
-						v = val
-					}
-					x = append(x, v)
-				}
-				sheetValues = append(sheetValues, x)
-			default:
-				panic("row scan failure")
-			}
-		}
-
-		rb := &sheets.BatchUpdateValuesRequest{
-			ValueInputOption: "USER_ENTERED",
-		}
-		rb.Data = append(rb.Data, &sheets.ValueRange{
-			Range:  rangeData,
-			Values: sheetValues,
-		})
-		_, err = sheetsService.Spreadsheets.Values.BatchUpdate(spreadsheetId, rb).Context(ctx).Do()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Done.")
 	}
+	wg.Wait()
+
 }
 
-func DbConnect() *sql.DB {
+func doLoad(ctx context.Context, loader string, client *http.Client, sheetsService *sheets.Service, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	log.Infof("Running Loader %s", loader)
+	SpreadsheetID := viper.GetString("loaders." + loader + ".sheet")
+	rangeData := viper.GetString("loaders.ulta.range")
+
+	db := dbConnect()
+	rows, _ := db.Query(viper.GetString("loaders." + loader + ".query"))
+	defer rows.Close()
+
+	columns, _ := rows.Columns()
+	headers := make([]interface{}, len(columns))
+	for i := range columns {
+		headers[i] = columns[i]
+	}
+	sheetValues := [][]interface{}{headers}
+	count := len(columns)
+	values := make([]interface{}, count)
+	valuePtrs := make([]interface{}, count)
+
+	for rows.Next() {
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+		var x []interface{}
+		switch err := rows.Scan(valuePtrs...); err {
+		case sql.ErrNoRows:
+			panic("something went wrong..")
+		case nil:
+			for i, _ := range columns {
+				val := values[i]
+
+				b, ok := val.([]byte)
+				var v interface{}
+				if ok {
+					v = string(b)
+				} else {
+					v = val
+				}
+				x = append(x, v)
+			}
+			sheetValues = append(sheetValues, x)
+		default:
+			panic("row scan failure")
+		}
+	}
+
+	rb := &sheets.BatchUpdateValuesRequest{
+		ValueInputOption: "USER_ENTERED",
+	}
+	rb.Data = append(rb.Data, &sheets.ValueRange{
+		Range:  rangeData,
+		Values: sheetValues,
+	})
+	_, err := sheetsService.Spreadsheets.Values.BatchUpdate(SpreadsheetID, rb).Context(ctx).Do()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Infof("Done %s", loader)
+}
+
+func dbConnect() *sql.DB {
 
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 		"password=%s dbname=%s",
