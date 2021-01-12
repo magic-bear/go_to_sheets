@@ -7,12 +7,16 @@ database:
   dbname: "realistic"
 loaders:
   test1:
+    # seconds to rerun the query, 0 for one-shot
+    repeat: 300
     sheet: 1ZBsExxxxzkXDjxPF-dDMRfJ4TIUhsEeqnBzz0iw
     # sheet name and range for data
     range: Sheet1!A:Z
     # your select statement, columns will become sheets columns.
     query: select username, count(*) cnt from users group by username
   test2:
+    # seconds to rerun the query, 0 for one-shot
+    repeat: 300
     sheet: 1ZBsExxyyyyyxzkXDjxPF-dDMRfJ4TIUhsEeqnBzz0iw
     # sheet name and range for data
     range: Sheet1!A:Z
